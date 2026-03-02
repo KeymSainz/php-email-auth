@@ -20,6 +20,13 @@
         <button type="submit">Login</button>
     </form>
 
+    <?php if (!empty($googleLoginUrl)): ?>
+        <p>Or continue with Google:</p>
+        <a href="<?php echo htmlspecialchars($googleLoginUrl); ?>">
+            <img src="https://developers.google.com/identity/images/btn_google_signin_dark_normal_web.png" alt="Sign in with Google">
+        </a>
+    <?php endif; ?>
+
     <p>New here? <a href="index.php?action=register">Create an account</a>.</p>
 </section>
 

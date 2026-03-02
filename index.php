@@ -2,10 +2,12 @@
 require_once 'config/env.php';
 require_once 'config/db.php';
 require_once 'controllers/AuthController.php';
+require_once 'vendor/autoload.php';
 
 $auth = new AuthController($conn);
 $action = $_GET['action'] ?? 'login';
 $message = null;
+$googleLoginUrl = null;
 
 switch ($action) {
     case 'register':
@@ -35,6 +37,20 @@ switch ($action) {
             $password = $_POST['password'] ?? '';
             $message = $auth->login($email, $password);
         }
+
+        $googleClientId = $_ENV['GOOGLE_CLIENT_ID'] ?? '';
+        $googleClientSecret = $_ENV['GOOGLE_CLIENT_SECRET'] ?? '';
+        $googleRedirectUri = $_ENV['GOOGLE_REDIRECT_URI'] ?? '';
+        if ($googleClientId !== '' && $googleClientSecret !== '' && $googleRedirectUri !== '') {
+            $client = new Google_Client();
+            $client->setClientId($googleClientId);
+            $client->setClientSecret($googleClientSecret);
+            $client->setRedirectUri($googleRedirectUri);
+            $client->addScope('email');
+            $client->addScope('profile');
+            $googleLoginUrl = $client->createAuthUrl();
+        }
+
         include 'views/login.php';
         break;
 
