@@ -54,6 +54,22 @@ switch ($action) {
         include 'views/login.php';
         break;
 
+    case 'verify-otp':
+        if (!isset($_SESSION['pending_login_email'])) {
+            header('Location: index.php?action=login');
+            exit();
+        }
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $otp = trim($_POST['otp'] ?? '');
+            $email = $_SESSION['pending_login_email'] ?? '';
+            $result = $auth->verifyOtp($email, $otp);
+            if (is_string($result)) {
+                $message = $result;
+            }
+        }
+        include 'views/verify-otp.php';
+        break;
+
     case 'home':
         if (!isset($_SESSION['user'])) {
             header('Location: index.php?action=login');

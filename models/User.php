@@ -93,6 +93,100 @@ class User {
         return $user;
     }
 
+    public function sendLoginOtp($email) {
+        $otp = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+
+        $stmt = $this->conn->prepare(
+            'UPDATE users SET login_otp = ?, login_otp_expires = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE email = ?'
+        );
+        $stmt->bind_param('ss', $otp, $email);
+
+        if (!$stmt->execute() || $stmt->affected_rows === 0) {
+            $stmt->close();
+            return 'Failed to generate OTP.';
+        }
+        $stmt->close();
+
+        $result = $this->sendOtpEmail($email, $otp);
+        if ($result !== true) {
+            return $result;
+        }
+
+        return true;
+    }
+
+    public function verifyLoginOtp($email, $otp) {
+        $otp = preg_replace('/\D/', '', $otp);
+        if (strlen($otp) !== 6) {
+            return false;
+        }
+
+        $stmt = $this->conn->prepare(
+            'SELECT id FROM users WHERE email = ? AND login_otp = ? AND login_otp_expires > NOW()'
+        );
+        $stmt->bind_param('ss', $email, $otp);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $valid = $result->num_rows === 1;
+        $stmt->close();
+
+        if (!$valid) {
+            return false;
+        }
+
+        $stmt = $this->conn->prepare(
+            'UPDATE users SET login_otp = NULL, login_otp_expires = NULL WHERE email = ?'
+        );
+        $stmt->bind_param('s', $email);
+        $stmt->execute();
+        $stmt->close();
+
+        return true;
+    }
+
+    private function sendOtpEmail($email, $otp) {
+        $mail = new PHPMailer(true);
+        $smtpUser = $this->env('SMTP_USER', '');
+        $smtpPass = $this->env('SMTP_PASS', '');
+        $smtpFrom = $this->env('SMTP_FROM', $smtpUser);
+
+        $configError = $this->validateSmtpConfig($smtpUser, $smtpPass, $smtpFrom);
+        if ($configError !== null) {
+            return $configError;
+        }
+
+        try {
+            $mail->isSMTP();
+            $mail->Host = $this->env('SMTP_HOST', 'smtp.gmail.com');
+            $mail->SMTPAuth = true;
+            $mail->Username = $smtpUser;
+            $mail->Password = $smtpPass;
+            $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+            $mail->Port = (int) $this->env('SMTP_PORT', '587');
+            $mail->Timeout = 15;
+
+            $mail->setFrom(
+                $smtpFrom,
+                $this->env('SMTP_FROM_NAME', 'Email Auth System')
+            );
+            $mail->addAddress($email);
+
+            $mail->isHTML(true);
+            $mail->Subject = 'Your Login OTP Code';
+            $mail->Body = "
+                <h3>Login Verification</h3>
+                <p>Your one-time password is:</p>
+                <p style='font-size:24px;font-weight:bold;letter-spacing:4px;'>{$otp}</p>
+                <p>This code expires in 10 minutes. Do not share it with anyone.</p>
+            ";
+
+            $mail->send();
+            return true;
+        } catch (Exception $e) {
+            return 'OTP could not be sent. SMTP Error: ' . $mail->ErrorInfo;
+        }
+    }
+
     private function sendVerificationEmail($email, $verificationCode) {
         $mail = new PHPMailer(true);
         $verificationLink = $this->buildVerificationLink($verificationCode);

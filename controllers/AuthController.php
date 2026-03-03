@@ -35,12 +35,35 @@ class AuthController {
 
         $result = $this->userModel->login($email, $password);
         if (is_array($result)) {
-            $_SESSION['user'] = $result['email'];
-            header('Location: index.php?action=home');
+            $sendResult = $this->userModel->sendLoginOtp($result['email']);
+            if ($sendResult !== true) {
+                return $sendResult;
+            }
+            $_SESSION['pending_login_email'] = $result['email'];
+            header('Location: index.php?action=verify-otp');
             exit();
         }
 
         return $result;
+    }
+
+    public function verifyOtp($email, $otp) {
+        if (empty($email) || empty($otp)) {
+            return 'Please enter the OTP code.';
+        }
+
+        if (!isset($_SESSION['pending_login_email']) || $_SESSION['pending_login_email'] !== $email) {
+            return 'Session expired. Please log in again.';
+        }
+
+        if (!$this->userModel->verifyLoginOtp($email, $otp)) {
+            return 'Invalid or expired OTP code.';
+        }
+
+        unset($_SESSION['pending_login_email']);
+        $_SESSION['user'] = $email;
+        header('Location: index.php?action=home');
+        exit();
     }
 
     public function logout() {
