@@ -12,12 +12,12 @@ class AuthController {
         $this->userModel = new User($conn);
     }
 
-    public function register($email, $password) {
-        if (empty($email) || empty($password)) {
-            return 'Email and password are required.';
+    public function register($fullname, $email, $password) {
+        if (empty(trim($fullname ?? '')) || empty($email) || empty($password)) {
+            return 'Full name, email and password are required.';
         }
 
-        return $this->userModel->register($email, $password);
+        return $this->userModel->register($fullname, $email, $password);
     }
 
     public function verify($code) {

@@ -12,9 +12,10 @@ $googleLoginUrl = null;
 switch ($action) {
     case 'register':
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $fullname = trim($_POST['fullname'] ?? '');
             $email = trim($_POST['email'] ?? '');
             $password = $_POST['password'] ?? '';
-            $result = $auth->register($email, $password);
+            $result = $auth->register($fullname, $email, $password);
             $message = $result === true
                 ? 'Registration successful. Check your email to verify your account.'
                 : $result;

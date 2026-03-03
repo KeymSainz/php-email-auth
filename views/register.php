@@ -11,6 +11,9 @@
     <?php endif; ?>
 
     <form method="POST" action="index.php?action=register">
+        <label for="reg-fullname">Full name</label>
+        <input id="reg-fullname" type="text" name="fullname" required>
+
         <label for="reg-email">Email</label>
         <input id="reg-email" type="email" name="email" required>
 

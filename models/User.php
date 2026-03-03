@@ -19,7 +19,11 @@ class User {
         $this->conn = $conn;
     }
 
-    public function register($email, $password) {
+    public function register($fullname, $email, $password) {
+        if (empty(trim($fullname ?? ''))) {
+            return 'Full name is required.';
+        }
+
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
             return 'Please enter a valid email address.';
         }
@@ -40,30 +44,67 @@ class User {
         $stmt->close();
 
         $hashedPassword = password_hash($password, PASSWORD_BCRYPT);
-        $verificationCode = bin2hex(random_bytes(16));
+        $fullname = trim($fullname);
 
         $stmt = $this->conn->prepare(
-            'INSERT INTO users (email, password, verification_code, is_verified) VALUES (?, ?, ?, 0)'
+            'INSERT INTO users (fullname, email, password, is_verified) VALUES (?, ?, ?, 0)'
         );
-        $stmt->bind_param('sss', $email, $hashedPassword, $verificationCode);
+        $stmt->bind_param('sss', $fullname, $email, $hashedPassword);
 
         if (!$stmt->execute()) {
             $stmt->close();
             return 'Registration failed. Please try again.';
         }
 
+        $userId = $this->conn->insert_id;
         $stmt->close();
-        return $this->sendVerificationEmail($email, $verificationCode);
+
+        $token = bin2hex(random_bytes(16));
+        $stmt = $this->conn->prepare(
+            'INSERT INTO email_verifications (user_id, token) VALUES (?, ?)'
+        );
+        $stmt->bind_param('is', $userId, $token);
+
+        if (!$stmt->execute()) {
+            $stmt->close();
+            return 'Registration failed. Please try again.';
+        }
+        $stmt->close();
+
+        return $this->sendVerificationEmail($email, $token);
     }
 
     public function verify($code) {
         $stmt = $this->conn->prepare(
-            'UPDATE users SET is_verified = 1, verification_code = NULL WHERE verification_code = ? AND is_verified = 0'
+            'SELECT user_id FROM email_verifications WHERE token = ? LIMIT 1'
         );
         $stmt->bind_param('s', $code);
         $stmt->execute();
+        $result = $stmt->get_result();
+
+        if ($result->num_rows !== 1) {
+            $stmt->close();
+            return false;
+        }
+
+        $row = $result->fetch_assoc();
+        $userId = $row['user_id'];
+        $stmt->close();
+
+        $stmt = $this->conn->prepare(
+            'UPDATE users SET is_verified = 1 WHERE id = ? AND is_verified = 0'
+        );
+        $stmt->bind_param('i', $userId);
+        $stmt->execute();
         $verified = $stmt->affected_rows > 0;
         $stmt->close();
+
+        if ($verified) {
+            $stmt = $this->conn->prepare('DELETE FROM email_verifications WHERE user_id = ?');
+            $stmt->bind_param('i', $userId);
+            $stmt->execute();
+            $stmt->close();
+        }
 
         return $verified;
     }
@@ -94,14 +135,28 @@ class User {
     }
 
     public function sendLoginOtp($email) {
+        $stmt = $this->conn->prepare('SELECT id FROM users WHERE email = ? LIMIT 1');
+        $stmt->bind_param('s', $email);
+        $stmt->execute();
+        $result = $stmt->get_result();
+
+        if ($result->num_rows !== 1) {
+            $stmt->close();
+            return 'Failed to generate OTP.';
+        }
+
+        $user = $result->fetch_assoc();
+        $userId = $user['id'];
+        $stmt->close();
+
         $otp = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
 
         $stmt = $this->conn->prepare(
-            'UPDATE users SET login_otp = ?, login_otp_expires = DATE_ADD(NOW(), INTERVAL 10 MINUTE) WHERE email = ?'
+            'INSERT INTO otp_codes (user_id, otp_code, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))'
         );
-        $stmt->bind_param('ss', $otp, $email);
+        $stmt->bind_param('is', $userId, $otp);
 
-        if (!$stmt->execute() || $stmt->affected_rows === 0) {
+        if (!$stmt->execute()) {
             $stmt->close();
             return 'Failed to generate OTP.';
         }
@@ -121,10 +176,24 @@ class User {
             return false;
         }
 
+        $stmt = $this->conn->prepare('SELECT id FROM users WHERE email = ? LIMIT 1');
+        $stmt->bind_param('s', $email);
+        $stmt->execute();
+        $result = $stmt->get_result();
+
+        if ($result->num_rows !== 1) {
+            $stmt->close();
+            return false;
+        }
+
+        $user = $result->fetch_assoc();
+        $userId = $user['id'];
+        $stmt->close();
+
         $stmt = $this->conn->prepare(
-            'SELECT id FROM users WHERE email = ? AND login_otp = ? AND login_otp_expires > NOW()'
+            'SELECT id FROM otp_codes WHERE user_id = ? AND otp_code = ? AND expires_at > NOW() LIMIT 1'
         );
-        $stmt->bind_param('ss', $email, $otp);
+        $stmt->bind_param('is', $userId, $otp);
         $stmt->execute();
         $result = $stmt->get_result();
         $valid = $result->num_rows === 1;
@@ -134,10 +203,8 @@ class User {
             return false;
         }
 
-        $stmt = $this->conn->prepare(
-            'UPDATE users SET login_otp = NULL, login_otp_expires = NULL WHERE email = ?'
-        );
-        $stmt->bind_param('s', $email);
+        $stmt = $this->conn->prepare('DELETE FROM otp_codes WHERE user_id = ?');
+        $stmt->bind_param('i', $userId);
         $stmt->execute();
         $stmt->close();
 
@@ -187,9 +254,9 @@ class User {
         }
     }
 
-    private function sendVerificationEmail($email, $verificationCode) {
+    private function sendVerificationEmail($email, $token) {
         $mail = new PHPMailer(true);
-        $verificationLink = $this->buildVerificationLink($verificationCode);
+        $verificationLink = $this->buildVerificationLink($token);
         $smtpUser = $this->env('SMTP_USER', '');
         $smtpPass = $this->env('SMTP_PASS', '');
         $smtpFrom = $this->env('SMTP_FROM', $smtpUser);
@@ -230,10 +297,10 @@ class User {
         }
     }
 
-    private function buildVerificationLink($verificationCode) {
+    private function buildVerificationLink($token) {
         $appUrl = rtrim($this->env('APP_URL', ''), '/');
         if ($appUrl !== '') {
-            return $appUrl . '/index.php?action=verify&code=' . urlencode($verificationCode);
+            return $appUrl . '/index.php?action=verify&code=' . urlencode($token);
         }
 
         $isHttps = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
@@ -241,7 +308,7 @@ class User {
         $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
         $basePath = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/index.php')), '/');
 
-        return "{$scheme}://{$host}{$basePath}/index.php?action=verify&code=" . urlencode($verificationCode);
+        return "{$scheme}://{$host}{$basePath}/index.php?action=verify&code=" . urlencode($token);
     }
 
     private function env($key, $default = '') {
